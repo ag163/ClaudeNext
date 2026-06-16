@@ -1,0 +1,12 @@
+{
+  "name": "claudenext-plugins",
+  "description": "ClaudeNext plugins — resilience hooks for Claude Code, including auto-continue on 429 / rate-limit errors.",
+  "owner": { "name": "mcxie" },
+  "plugins": [
+    {
+      "name": "auto-continue-on-429",
+      "source": "./",
+      "description": "Auto-continue Claude when a turn stops after a 429 / rate-limit error."
+    }
+  ]
+}
