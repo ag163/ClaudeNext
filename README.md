@@ -2,7 +2,7 @@
 
 ClaudeNext Auto Next For 429 Stop
 
-A Claude Code plugin (`auto-continue-on-429`) that auto-resumes a task when a turn stops right after a rate-limit / 429 error.
+A Claude Code / Codex plugin (`auto-continue-on-429`) that auto-resumes a task when a turn stops right after a rate-limit / 429 error.
 
 ## How it actually works (important)
 
@@ -28,10 +28,24 @@ finishes a turn. On each stop it:
 
 ## Install
 
+### Claude Code
+
 ```
 /plugin marketplace add mcxiedidi/ClaudeNext
 /plugin install auto-continue-on-429@claudenext-plugins
 ```
+
+### Codex
+
+This fork also includes a Codex manifest at `.codex-plugin/plugin.json`.
+
+If you publish this fork as a marketplace source, add it to Codex:
+
+```bash
+codex plugin marketplace add ag163/ClaudeNext
+```
+
+Then restart Codex, open `/plugins`, install **Auto Continue on 429**, and review/trust the bundled hook when Codex prompts you.
 
 ## Requirements
 

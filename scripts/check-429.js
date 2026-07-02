@@ -45,6 +45,7 @@ function readStdin() {
 function stateDir() {
   const base =
     process.env.CLAUDE_PLUGIN_DATA ||
+    process.env.CODEX_PLUGIN_DATA ||
     path.join(os.tmpdir(), "claude-auto-continue-429");
   try {
     fs.mkdirSync(base, { recursive: true });
