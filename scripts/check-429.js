@@ -2,37 +2,31 @@
 "use strict";
 
 /*
- * Stop hook for the auto-continue-on-429 plugin.
+ * Stop hook for auto-continue-on-429.
  *
- * Claude Code fires the Stop hook every time the assistant finishes a turn.
- * There is no "API returned 429" event, so we approximate it: when Claude
- * stops, we scan the NEW portion of the session transcript. If that new
- * portion shows both an error signal AND a rate-limit signal, we block the
- * stop and feed Claude an English "continue" instruction so it resumes the
- * task automatically.
- *
- * Safeguards against runaway loops:
- *   1. Honor stop_hook_active — if we are already inside a continue, bail.
- *   2. Only scan transcript bytes added since our last run (per session),
- *      so an old 429 marker can't retrigger forever.
- *   3. Require an error keyword AND a rate-limit keyword to both match.
- *   4. Cap the number of auto-continues per session.
+ * Codex stores transcripts as JSONL. Never scan raw transcript JSON because
+ * normal user messages, assistant explanations, tool output, test fixtures, and
+ * hook prompts can legitimately contain "429" / "rate limit" text. For JSONL
+ * transcripts, inspect only explicit error-like events. If the transcript is
+ * not JSONL, fall back to raw text for Claude Code compatibility.
  */
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 
 const MAX_CONTINUES_PER_SESSION = 5;
 const CONTINUE_MESSAGE =
-  "It looks like the previous turn was interrupted by a rate limit (HTTP 429). " +
+  "The previous turn appears to have hit a temporary provider limit. " +
   "Please continue exactly where you left off and finish the task. Do not restart from scratch.";
 
-// Match an error/interruption signal.
-const ERROR_RE = /\b(error|failed|interrupted|overloaded|exception|aborted)\b/i;
-// Match a rate-limit signal (429 or common phrasings).
+const ERROR_RE = /\b(error|failed|interrupted|overloaded|exception|aborted|failure|unavailable)\b/i;
 const RATE_LIMIT_RE =
-  /(\b429\b|rate[\s_-]?limit|too many requests|rate.limited|quota exceeded|retry[\s_-]?after)/i;
+  /(\b429\b|rate[\s_-]?limit|too many requests|rate.limited|quota exceeded|retry[\s_-]?after|throttled)/i;
+const SELF_CONTINUE_MESSAGE_RE =
+  /(?:It looks like the previous turn was interrupted by a rate limit \(HTTP 429\)\.\s*|The previous turn appears to have hit a temporary provider limit\.\s*)Please continue exactly where you left off and finish the task\. Do not restart from scratch\./g;
+const HOOK_PROMPT_RE = /<hook_prompt\b[\s\S]*?<\/hook_prompt>/g;
 
 function readStdin() {
   try {
@@ -76,15 +70,104 @@ function saveState(sessionId, state) {
   }
 }
 
-// Allow Claude to stop normally: emit nothing, exit 0.
+function claimContinueOnce(sessionId, transcriptPath, size) {
+  const key = crypto
+    .createHash("sha256")
+    .update(`${sessionId || "unknown"}|${transcriptPath || "unknown"}|${size || 0}`)
+    .digest("hex");
+  const dir = path.join(os.tmpdir(), "auto-continue-on-429-locks");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const fd = fs.openSync(path.join(dir, `${key}.lock`), "wx");
+    fs.writeFileSync(fd, String(Date.now()), "utf8");
+    fs.closeSync(fd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function allowStop() {
   process.exit(0);
 }
 
-// Block the stop and tell Claude to continue.
 function forceContinue(reason) {
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
   process.exit(0);
+}
+
+function cleanText(text) {
+  return String(text || "")
+    .replace(HOOK_PROMPT_RE, "")
+    .replace(SELF_CONTINUE_MESSAGE_RE, "");
+}
+
+function payloadLooksErrorLike(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  const type = String(payload.type || "").toLowerCase();
+  const level = String(payload.level || payload.severity || "").toLowerCase();
+  if (type.includes("error") || type.includes("failure")) return true;
+  if (level === "error" || level === "fatal") return true;
+  return false;
+}
+
+function rateLimitReachedPayload(payload) {
+  const rateLimits = payload && payload.rate_limits;
+  if (!rateLimits || typeof rateLimits !== "object") return false;
+  const reachedType = String(rateLimits.rate_limit_reached_type || "").trim().toLowerCase();
+  if (reachedType && reachedType !== "none" && reachedType !== "null" && reachedType !== "false") {
+    return true;
+  }
+  return Boolean(rateLimits.limit_reached || rateLimits.exceeded || rateLimits.retry_after);
+}
+
+function extractSignalTextFromJsonLine(line) {
+  let entry;
+  try {
+    entry = JSON.parse(line);
+  } catch {
+    return { parsed: false, text: "" };
+  }
+
+  const topType = String(entry && entry.type ? entry.type : "").toLowerCase();
+  const payload = entry && entry.payload;
+
+  if (topType.includes("error")) {
+    return { parsed: true, text: cleanText(JSON.stringify(entry)) };
+  }
+
+  if (payloadLooksErrorLike(payload)) {
+    return { parsed: true, text: cleanText(JSON.stringify(payload)) };
+  }
+
+  // Codex token_count events carry structured rate limit metadata. Trigger only
+  // when Codex says a limit was actually reached, not merely because the field
+  // name "rate_limits" exists in every token_count event.
+  if (payload && payload.type === "token_count" && rateLimitReachedPayload(payload)) {
+    return { parsed: true, text: "error rate limit 429 " + cleanText(JSON.stringify(payload.rate_limits)) };
+  }
+
+  return { parsed: true, text: "" };
+}
+
+function signalChunkFromTranscriptChunk(chunk) {
+  const lines = String(chunk || "").split(/\r?\n/).filter(Boolean);
+  let parsedJsonLines = 0;
+  const signals = [];
+
+  for (const line of lines) {
+    const result = extractSignalTextFromJsonLine(line);
+    if (result.parsed) parsedJsonLines += 1;
+    if (result.text) signals.push(result.text);
+  }
+
+  if (parsedJsonLines > 0) {
+    return signals.join("\n");
+  }
+
+  // Claude Code / older tools may provide a non-JSON transcript. Keep the old
+  // heuristic only for that case.
+  return cleanText(chunk);
 }
 
 function main() {
@@ -96,7 +179,6 @@ function main() {
     allowStop();
   }
 
-  // Already continuing from a prior stop hook — never loop.
   if (payload.stop_hook_active) {
     allowStop();
   }
@@ -116,12 +198,10 @@ function main() {
     allowStop();
   }
 
-  // Transcript was truncated/rotated — reset our cursor.
   if (size < state.offset) {
     state.offset = 0;
   }
 
-  // Read only the bytes added since last time.
   let chunk = "";
   try {
     const fd = fs.openSync(transcriptPath, "r");
@@ -136,12 +216,16 @@ function main() {
     allowStop();
   }
 
-  // Advance the cursor regardless of outcome so we never rescan old content.
   state.offset = size;
 
-  const hitRateLimit = RATE_LIMIT_RE.test(chunk) && ERROR_RE.test(chunk);
+  const signalChunk = signalChunkFromTranscriptChunk(chunk);
+  const hitRateLimit = RATE_LIMIT_RE.test(signalChunk) && ERROR_RE.test(signalChunk);
 
   if (hitRateLimit && state.continues < MAX_CONTINUES_PER_SESSION) {
+    if (!claimContinueOnce(sessionId, transcriptPath, size)) {
+      saveState(sessionId, state);
+      allowStop();
+    }
     state.continues += 1;
     saveState(sessionId, state);
     forceContinue(CONTINUE_MESSAGE);
@@ -152,3 +236,4 @@ function main() {
 }
 
 main();
+

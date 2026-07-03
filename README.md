@@ -47,6 +47,15 @@ codex plugin marketplace add ag163/ClaudeNext
 
 Then restart Codex, open `/plugins`, install **Auto Continue on 429**, and review/trust the bundled hook when Codex prompts you.
 
-## Requirements
+
+## Codex JSONL filtering
+
+For Codex, the hook parses the JSONL transcript and ignores normal assistant messages,
+user messages, tool outputs, reasoning text, and prior `<hook_prompt>` continuation
+prompts. This prevents false positives when a conversation merely discusses `429`,
+`rate limit`, or contains test fixtures mentioning those strings. It still triggers
+for explicit error events and structured token-count rate-limit metadata.`r`n`r`n## Requirements
 
 `node` on PATH (the Stop hook runs `scripts/check-429.js`).
+
+

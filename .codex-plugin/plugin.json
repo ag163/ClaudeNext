@@ -1,6 +1,6 @@
 {
   "name": "auto-continue-on-429",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Auto-resume Codex or Claude Code when a turn stops after a rate-limit / 429 error.",
   "author": {
     "name": "mcxie"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Auto Continue on 429",
     "shortDescription": "Continue automatically after rate-limit interruptions.",
-    "longDescription": "Runs a Stop hook that scans the latest transcript chunk for 429 or rate-limit errors, then asks the agent to continue from where it stopped with loop guards.",
+    "longDescription": "Runs a Stop hook that parses Codex JSONL transcripts, ignores normal messages/tool output/hook prompts, and continues only after explicit rate-limit error events.",
     "developerName": "mcxie",
     "category": "Productivity",
     "capabilities": [

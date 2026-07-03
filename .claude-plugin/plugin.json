@@ -1,9 +1,10 @@
 {
   "name": "auto-continue-on-429",
   "displayName": "Auto Continue on 429",
-  "version": "0.1.0",
-  "description": "When Claude stops after hitting a rate-limit / 429 error, automatically feed an English 'continue' prompt so the AI resumes the task. Includes loop guards and a per-session retry cap.",
+  "version": "0.1.1",
+  "description": "Auto-resume Claude Code or Codex only after explicit rate-limit / 429 error events, with JSONL transcript filtering and loop guards.",
   "author": { "name": "mcxie" },
   "keywords": ["hooks", "429", "rate-limit", "auto-continue", "resilience"],
   "hooks": "./hooks/hooks.json"
 }
+
